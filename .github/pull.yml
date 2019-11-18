@@ -3,3 +3,6 @@ rules:
   - base: master
     upstream: opencv:master
     mergeMethod: hardreset
+  - base: 3.4
+    upstream: opencv:3.4
+    mergeMethod: hardreset
