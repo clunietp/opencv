@@ -1,5 +1,5 @@
 version: "1"
 rules:
-  - base: opencv
-    upstream: opencv:opencv
+  - base: master
+    upstream: opencv:master
     mergeMethod: hardreset
