@@ -2,7 +2,7 @@
 // It is subject to the license terms in the LICENSE file found in the top-level directory
 // of this distribution and at http://opencv.org/license.html.
 //
-// Copyright (C) 2018 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 
 
 #include "precomp.hpp"
@@ -337,6 +337,14 @@ GAPI_OCL_KERNEL(GOCLSum, cv::gapi::core::GSum)
     }
 };
 
+GAPI_OCL_KERNEL(GOCLCountNonZero, cv::gapi::core::GCountNonZero)
+{
+    static void run(const cv::UMat& in, int& out)
+    {
+        out = cv::countNonZero(in);
+    }
+};
+
 GAPI_OCL_KERNEL(GOCLAddW, cv::gapi::core::GAddW)
 {
     static void run(const cv::UMat& in1, double alpha, const cv::UMat& in2, double beta, double gamma, int dtype, cv::UMat& out)
@@ -450,14 +458,6 @@ GAPI_OCL_KERNEL(GOCLMerge4, cv::gapi::core::GMerge4)
     }
 };
 
-GAPI_OCL_KERNEL(GOCLResize, cv::gapi::core::GResize)
-{
-    static void run(const cv::UMat& in, cv::Size sz, double fx, double fy, int interp, cv::UMat &out)
-    {
-        cv::resize(in, out, sz, fx, fy, interp);
-    }
-};
-
 GAPI_OCL_KERNEL(GOCLRemap, cv::gapi::core::GRemap)
 {
     static void run(const cv::UMat& in, const cv::Mat& x, const cv::Mat& y, int a, int b, cv::Scalar s, cv::UMat& out)
@@ -479,14 +479,6 @@ GAPI_OCL_KERNEL(GOCLCrop, cv::gapi::core::GCrop)
     static void run(const cv::UMat& in, cv::Rect rect, cv::UMat& out)
     {
         cv::UMat(in, rect).copyTo(out);
-    }
-};
-
-GAPI_OCL_KERNEL(GOCLCopy, cv::gapi::core::GCopy)
-{
-    static void run(const cv::UMat& in, cv::UMat& out)
-    {
-        in.copyTo(out);
     }
 };
 
@@ -522,7 +514,16 @@ GAPI_OCL_KERNEL(GOCLConvertTo, cv::gapi::core::GConvertTo)
     }
 };
 
-cv::gapi::GKernelPackage cv::gapi::core::ocl::kernels()
+
+GAPI_OCL_KERNEL(GOCLTranspose, cv::gapi::core::GTranspose)
+{
+    static void run(const cv::UMat& in,  cv::UMat& out)
+    {
+        cv::transpose(in, out);
+    }
+};
+
+cv::GKernelPackage cv::gapi::core::ocl::kernels()
 {
     static auto pkg = cv::gapi::kernels
         <  GOCLAdd
@@ -565,6 +566,7 @@ cv::gapi::GKernelPackage cv::gapi::core::ocl::kernels()
          , GOCLAbsDiff
          , GOCLAbsDiffC
          , GOCLSum
+         , GOCLCountNonZero
          , GOCLAddW
          , GOCLNormL1
          , GOCLNormL2
@@ -575,17 +577,16 @@ cv::gapi::GKernelPackage cv::gapi::core::ocl::kernels()
          , GOCLInRange
          , GOCLSplit3
          , GOCLSplit4
-         , GOCLResize
          , GOCLMerge3
          , GOCLMerge4
          , GOCLRemap
          , GOCLFlip
          , GOCLCrop
-         , GOCLCopy
          , GOCLConcatHor
          , GOCLConcatVert
          , GOCLLUT
          , GOCLConvertTo
+         , GOCLTranspose
          >();
     return pkg;
 }

@@ -92,6 +92,7 @@ static bool wasInitialized = false;
 @interface CVSlider : NSView {
     NSSlider *slider;
     NSTextField *name;
+    NSString *initialName;
     int *value;
     void *userData;
     CvTrackbarCallback callback;
@@ -99,6 +100,7 @@ static bool wasInitialized = false;
 }
 @property(retain) NSSlider *slider;
 @property(retain) NSTextField *name;
+@property(retain) NSString *initialName;
 @property(assign) int *value;
 @property(assign) void *userData;
 @property(assign) CvTrackbarCallback callback;
@@ -107,17 +109,22 @@ static bool wasInitialized = false;
 
 @interface CVWindow : NSWindow {
     NSMutableDictionary *sliders;
+    NSMutableArray *slidersKeys;
     CvMouseCallback mouseCallback;
     void *mouseParam;
     BOOL autosize;
     BOOL firstContent;
     int status;
+    int x0, y0;
 }
 @property(assign) CvMouseCallback mouseCallback;
 @property(assign) void *mouseParam;
 @property(assign) BOOL autosize;
 @property(assign) BOOL firstContent;
+@property(assign) int x0;
+@property(assign) int y0;
 @property(retain) NSMutableDictionary *sliders;
+@property(retain) NSMutableArray *slidersKeys;
 @property(readwrite) int status;
 - (CVView *)contentView;
 - (void)cvSendMouseEvent:(NSEvent *)event type:(int)type flags:(int)flags;
@@ -252,6 +259,16 @@ CV_IMPL void cvShowImage( const char* name, const CvArr* arr)
                 contentSize.height = scaledImageSize.height + [window contentView].sliderHeight;
                 contentSize.width = std::max<int>(scaledImageSize.width, MIN_SLIDER_WIDTH);
                 [window setContentSize:contentSize]; //adjust sliders to fit new window size
+                if([window firstContent])
+                {
+                    int x = [window x0];
+                    int y = [window y0];
+                    if(x >= 0 && y >= 0)
+                    {
+                        y = [[window screen] visibleFrame].size.height - y;
+                        [window setFrameTopLeftPoint:NSMakePoint(x, y)];
+                    }
+                }
             }
         }
         [window setFirstContent:NO];
@@ -275,7 +292,6 @@ CV_IMPL void cvResizeWindow( const char* name, int width, int height)
 
 CV_IMPL void cvMoveWindow( const char* name, int x, int y)
 {
-
     CV_FUNCNAME("cvMoveWindow");
     __BEGIN__;
 
@@ -287,8 +303,14 @@ CV_IMPL void cvMoveWindow( const char* name, int x, int y)
     //cout << "cvMoveWindow"<< endl;
     window = cvGetWindow(name);
     if(window) {
-        y = [[window screen] frame].size.height - y;
-        [window setFrameTopLeftPoint:NSMakePoint(x, y)];
+        if([window firstContent]) {
+            [window setX0:x];
+            [window setY0:y];
+        }
+        else {
+            y = [[window screen] visibleFrame].size.height - y;
+            [window setFrameTopLeftPoint:NSMakePoint(x, y)];
+        }
     }
     [localpool1 drain];
 
@@ -429,6 +451,9 @@ CV_IMPL void cvSetTrackbarPos(const char* trackbar_name, const char* window_name
         slider = [[window sliders] valueForKey:[NSString stringWithFormat:@"%s", trackbar_name]];
         if(slider) {
             [[slider slider] setIntValue:pos];
+            if([slider respondsToSelector:@selector(handleSlider)]) {
+                [slider performSelector:@selector(handleSlider)];
+            }
         }
     }
     [localpool5 drain];
@@ -557,6 +582,8 @@ CV_IMPL int cvNamedWindow( const char* name, int flags )
     [window setFrameTopLeftPoint:initContentRect.origin];
 
     [window setFirstContent:YES];
+    [window setX0:-1];
+    [window setY0:-1];
 
     [window setContentView:[[CVView alloc] init]];
 
@@ -775,18 +802,18 @@ void cvSetPropTopmost_COCOA( const char* name, const bool topmost )
     __END__;
 }
 
-void cv::setWindowTitle(const String& winname, const String& title)
+void setWindowTitle_COCOA(const cv::String& winname, const cv::String& title)
 {
     CVWindow *window = cvGetWindow(winname.c_str());
 
     if (window == NULL)
     {
-        namedWindow(winname);
+        cv::namedWindow(winname);
         window = cvGetWindow(winname.c_str());
     }
 
     if (window == NULL)
-        CV_Error(Error::StsNullPtr, "NULL window");
+        CV_Error(cv::Error::StsNullPtr, "NULL window");
 
     NSAutoreleasePool* localpool = [[NSAutoreleasePool alloc] init];
 
@@ -819,7 +846,10 @@ static NSSize constrainAspectRatio(NSSize base, NSSize constraint) {
 @synthesize mouseParam;
 @synthesize autosize;
 @synthesize firstContent;
+@synthesize x0;
+@synthesize y0;
 @synthesize sliders;
+@synthesize slidersKeys;
 @synthesize status;
 
 - (void)cvSendMouseEvent:(NSEvent *)event type:(int)type flags:(int)flags {
@@ -911,6 +941,9 @@ static NSSize constrainAspectRatio(NSSize base, NSSize constraint) {
     if(sliders == nil)
         sliders = [[NSMutableDictionary alloc] init];
 
+    if(slidersKeys == nil)
+        slidersKeys = [[NSMutableArray alloc] init];
+
     NSString *cvname = [NSString stringWithFormat:@"%s", name];
 
     // Avoid overwriting slider
@@ -920,20 +953,23 @@ static NSSize constrainAspectRatio(NSSize base, NSSize constraint) {
     // Create slider
     CVSlider *slider = [[CVSlider alloc] init];
     [[slider name] setStringValue:cvname];
+    slider.initialName = [NSString stringWithFormat:@"%s", name];
     [[slider slider] setMaxValue:max];
     [[slider slider] setMinValue:0];
-    [[slider slider] setNumberOfTickMarks:(max+1)];
-    [[slider slider] setAllowsTickMarkValuesOnly:YES];
     if(value)
     {
         [[slider slider] setIntValue:*value];
         [slider setValue:value];
+        NSString *temp = [slider initialName];
+        NSString *text = [NSString stringWithFormat:@"%@ %d", temp, *value];
+        [[slider name] setStringValue: text];
     }
     if(callback)
         [slider setCallback:callback];
 
     // Save slider
     [sliders setValue:slider forKey:cvname];
+    [slidersKeys addObject:cvname];
     [[self contentView] addSubview:slider];
 
 
@@ -1072,7 +1108,7 @@ static NSSize constrainAspectRatio(NSSize base, NSSize constraint) {
 
     CVWindow *cvwindow = (CVWindow *)[self window];
     if ([cvwindow respondsToSelector:@selector(sliders)]) {
-        for(NSString *key in [cvwindow sliders]) {
+        for(NSString *key in [cvwindow slidersKeys]) {
             CVSlider *slider = [[cvwindow sliders] valueForKey:key];
             NSRect r = [slider frame];
             r.origin.y = height - r.size.height;
@@ -1124,6 +1160,7 @@ static NSSize constrainAspectRatio(NSSize base, NSSize constraint) {
 
 @synthesize slider;
 @synthesize name;
+@synthesize initialName;
 @synthesize value;
 @synthesize userData;
 @synthesize callback;
@@ -1153,7 +1190,7 @@ static NSSize constrainAspectRatio(NSSize base, NSSize constraint) {
     [slider setMaxValue:100];
     [slider setContinuous:YES];
     [slider setTarget:self];
-    [slider setAction:@selector(sliderChanged:)];
+    [slider setAction:@selector(handleSliderNotification:)];
     [self addSubview:slider];
 
     [self setAutoresizingMask:NSViewWidthSizable];
@@ -1163,9 +1200,16 @@ static NSSize constrainAspectRatio(NSSize base, NSSize constraint) {
     return self;
 }
 
-- (void)sliderChanged:(NSNotification *)notification {
+- (void)handleSliderNotification:(NSNotification *)notification {
     (void)notification;
+    [self handleSlider];
+}
+
+- (void)handleSlider {
     int pos = [slider intValue];
+    NSString *temp = [self initialName];
+    NSString *text = [NSString stringWithFormat:@"%@ %d", temp, pos];
+    [name setStringValue: text];
     if(value)
         *value = pos;
     if(callback)

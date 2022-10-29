@@ -14,6 +14,8 @@ Implementation of padding layer, which adds paddings to input blob.
 #include "../op_cuda.hpp"
 #include "../op_halide.hpp"
 #include "../op_inf_engine.hpp"
+#include "../ie_ngraph.hpp"
+
 #include <vector>
 
 #ifdef HAVE_CUDA
@@ -100,10 +102,14 @@ public:
     virtual bool supportBackend(int backendId) CV_OVERRIDE
     {
 #ifdef HAVE_INF_ENGINE
-        if (backendId == DNN_BACKEND_INFERENCE_ENGINE)
-            return INF_ENGINE_VER_MAJOR_GE(INF_ENGINE_RELEASE_2019R1) &&
-                   (preferableTarget != DNN_TARGET_MYRIAD ||
-                    (dstRanges.size() == 4 && paddings[0].first == 0 && paddings[0].second == 0));
+        if (backendId == DNN_BACKEND_INFERENCE_ENGINE_NGRAPH)
+        {
+            bool isMyriad = preferableTarget == DNN_TARGET_MYRIAD || preferableTarget == DNN_TARGET_HDDL;
+            if (isMyriad)
+                return dstRanges.size() == 4 && paddings[0].first == 0 && paddings[0].second == 0;
+
+            return (dstRanges.size() <= 4 || !isArmComputePlugin());
+        }
 #endif
         return backendId == DNN_BACKEND_OPENCV ||
                backendId == DNN_BACKEND_CUDA ||
@@ -128,16 +134,19 @@ public:
                 cv::convertFp16(paddingValue_fp32, paddingValue_fp16);
                 outputs[0].setTo(paddingValue_fp16[0]);
             }
+            else if (inputs_arr.depth() == CV_8S)
+                outputs[0].setTo(saturate_cast<int8_t>(paddingValue));
             else
                 outputs[0].setTo(paddingValue);
             inputs[0].copyTo(outputs[0](dstRanges));
         }
-        else if (paddingType == "reflect")
+        else if (paddingType == "reflect" || paddingType == "edge")
         {
             CV_Assert(inputs.size() == 1);
             CV_Assert(outputs.size() == 1);
             CV_Assert(inputs[0].dims == 4);
             CV_Assert(outputs[0].dims == 4);
+            int borderType = paddingType == "reflect" ? BORDER_REFLECT_101 : BORDER_REPLICATE;
 
             if (inputs[0].size[0] != outputs[0].size[0] || inputs[0].size[1] != outputs[0].size[1])
                 CV_Error(Error::StsNotImplemented, "Only spatial reflection padding is supported.");
@@ -150,8 +159,8 @@ public:
             const int padBottom = outHeight - dstRanges[2].end;
             const int padLeft = dstRanges[3].start;
             const int padRight = outWidth - dstRanges[3].end;
-            CV_CheckLT(padTop, inpHeight, ""); CV_CheckLT(padBottom, inpHeight, "");
-            CV_CheckLT(padLeft, inpWidth, ""); CV_CheckLT(padRight, inpWidth, "");
+            CV_CheckLE(padTop, inpHeight, ""); CV_CheckLE(padBottom, inpHeight, "");
+            CV_CheckLE(padLeft, inpWidth, ""); CV_CheckLE(padRight, inpWidth, "");
 
             for (size_t n = 0; n < inputs[0].size[0]; ++n)
             {
@@ -160,7 +169,7 @@ public:
                     copyMakeBorder(getPlane(inputs[0], n, ch),
                                    getPlane(outputs[0], n, ch),
                                    padTop, padBottom, padLeft, padRight,
-                                   BORDER_REFLECT_101);
+                                   borderType);
                 }
             }
         }
@@ -210,30 +219,39 @@ public:
         return Ptr<BackendNode>();
     }
 
-#ifdef HAVE_INF_ENGINE
-    virtual Ptr<BackendNode> initInfEngine(const std::vector<Ptr<BackendWrapper> >&) CV_OVERRIDE
-    {
-        InferenceEngine::Builder::Layer ieLayer(name);
-        ieLayer.setName(name);
-        ieLayer.setType("Pad");
 
-        std::vector<int> begins(paddings.size(), 0), ends(paddings.size(), 0);
+#ifdef HAVE_DNN_NGRAPH
+    virtual Ptr<BackendNode> initNgraph(const std::vector<Ptr<BackendWrapper> >& inputs,
+                                        const std::vector<Ptr<BackendNode> >& nodes) CV_OVERRIDE
+    {
+        auto& ieInpNode = nodes[0].dynamicCast<InfEngineNgraphNode>()->node;
+        std::vector<int64_t> begins(paddings.size(), 0), ends(paddings.size(), 0);
         for (int i = 0; i < paddings.size(); ++i)
         {
-            begins[i] = paddings[i].first;
-            ends[i] = paddings[i].second;
+            begins[i] = static_cast<int64_t>(paddings[i].first);
+            ends[i]   = static_cast<int64_t>(paddings[i].second);
         }
-        ieLayer.getParameters()["pads_begin"] = begins;
-        ieLayer.getParameters()["pads_end"] = ends;
-        ieLayer.getParameters()["pad_mode"] = paddingType;
-        if (paddingType == "constant")
-            ieLayer.getParameters()["pad_value"] = paddingValue;
+        auto padding_below = std::make_shared<ngraph::op::Constant>(ngraph::element::i64, ngraph::Shape{begins.size()}, begins.data());
+        auto padding_above = std::make_shared<ngraph::op::Constant>(ngraph::element::i64, ngraph::Shape{ends.size()}, ends.data());
+        auto pad_mode = paddingType == "constant" ? ngraph::op::PadMode::CONSTANT : ngraph::op::PadMode::REFLECT; // SYMMETRIC
+        auto arg_pad_value = std::make_shared<ngraph::op::Constant>(ngraph::element::f32, ngraph::Shape{}, &paddingValue);;
 
-        ieLayer.setInputPorts(std::vector<InferenceEngine::Port>(1));
-        ieLayer.setOutputPorts(std::vector<InferenceEngine::Port>(1));
-        return Ptr<BackendNode>(new InfEngineBackendNode(ieLayer));
+        auto pad = paddingType == "constant" ?
+             std::make_shared<ngraph::op::v1::Pad>(ieInpNode, padding_below, padding_above, arg_pad_value, pad_mode) :
+             std::make_shared<ngraph::op::v1::Pad>(ieInpNode, padding_below, padding_above, pad_mode);
+        return Ptr<BackendNode>(new InfEngineNgraphNode(pad));
     }
 #endif
+
+    virtual bool tryQuantize(const std::vector<std::vector<float> > &scales,
+                             const std::vector<std::vector<int> > &zeropoints, LayerParams& params) CV_OVERRIDE
+    {
+        float outputScale = scales[1][0];
+        int outputZp = zeropoints[1][0];
+        float padValue = outputZp + std::round(params.get<float>("value", 0)/outputScale);
+        params.set("value", padValue);
+        return true;
+    }
 
 private:
     std::vector<std::pair<int, int> > paddings;  // Pairs pad before, pad after.

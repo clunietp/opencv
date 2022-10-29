@@ -181,7 +181,7 @@ public:
     //! computes a background image which are the mean of all background gaussians
     virtual void getBackgroundImage(OutputArray backgroundImage) const CV_OVERRIDE;
 
-    //! re-initiaization method
+    //! re-initialization method
     void initialize(Size _frameSize, int _frameType)
     {
         frameSize = _frameSize;
@@ -235,6 +235,8 @@ public:
             bgmodelUsedModes = Scalar::all(0);
         }
     }
+
+    virtual String getDefaultName() const CV_OVERRIDE { return "BackgroundSubtractor_MOG2"; }
 
     virtual int getHistory() const CV_OVERRIDE { return history; }
     virtual void setHistory(int _nframes) CV_OVERRIDE { history = _nframes; }
