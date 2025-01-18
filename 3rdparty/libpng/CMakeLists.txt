@@ -66,6 +66,11 @@ if(PPC64LE OR PPC64)
   endif()
 endif()
 
+if(APPLE AND CV_CLANG AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13.1)
+  ocv_warnings_disable(CMAKE_C_FLAGS -Wnull-pointer-subtraction)
+  ocv_warnings_disable(CMAKE_C_FLAGS -Wunused-but-set-variable)
+endif()
+
 # ----------------------------------------------------------------------------------
 #         Define the library target:
 # ----------------------------------------------------------------------------------
@@ -77,7 +82,9 @@ endif(MSVC)
 add_library(${PNG_LIBRARY} STATIC ${OPENCV_3RDPARTY_EXCLUDE_FROM_ALL} ${lib_srcs} ${lib_hdrs})
 target_link_libraries(${PNG_LIBRARY} ${ZLIB_LIBRARIES})
 
-ocv_warnings_disable(CMAKE_C_FLAGS -Wundef -Wcast-align -Wimplicit-fallthrough -Wunused-parameter -Wsign-compare)
+ocv_warnings_disable(CMAKE_C_FLAGS -Wundef -Wcast-align -Wimplicit-fallthrough -Wunused-parameter -Wsign-compare
+    -Wmaybe-uninitialized
+)
 
 set_target_properties(${PNG_LIBRARY}
   PROPERTIES OUTPUT_NAME ${PNG_LIBRARY}

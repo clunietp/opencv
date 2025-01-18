@@ -78,10 +78,14 @@ Input depth (src.depth()) | Output depth (ddepth)
 --------------------------|----------------------
 CV_8U                     | -1/CV_16S/CV_32F/CV_64F
 CV_16U/CV_16S             | -1/CV_32F/CV_64F
-CV_32F                    | -1/CV_32F/CV_64F
+CV_32F                    | -1/CV_32F
 CV_64F                    | -1/CV_64F
 
 @note when ddepth=-1, the output image will have the same depth as the source.
+
+@note if you need double floating-point accuracy and using single floating-point input data
+(CV_32F input and CV_64F output depth combination), you can use @ref Mat.convertTo to convert
+the input data to the desired precision.
 
     @defgroup imgproc_transform Geometric Image Transformations
 
@@ -118,7 +122,7 @@ sophisticated [interpolation methods](http://en.wikipedia.org/wiki/Multivariate_
 where a polynomial function is fit into some neighborhood of the computed pixel \f$(f_x(x,y),
 f_y(x,y))\f$, and then the value of the polynomial at \f$(f_x(x,y), f_y(x,y))\f$ is taken as the
 interpolated pixel value. In OpenCV, you can choose between several interpolation methods. See
-resize for details.
+#resize for details.
 
 @note The geometrical transformations do not work with `CV_8S` or `CV_32S` images.
 
@@ -1537,7 +1541,7 @@ CV_EXPORTS_W void boxFilter( InputArray src, OutputArray dst, int ddepth,
 For every pixel \f$ (x, y) \f$ in the source image, the function calculates the sum of squares of those neighboring
 pixel values which overlap the filter placed over the pixel \f$ (x, y) \f$.
 
-The unnormalized square box filter can be useful in computing local image statistics such as the the local
+The unnormalized square box filter can be useful in computing local image statistics such as the local
 variance and standard deviation around the neighborhood of a pixel.
 
 @param src input image
@@ -1753,7 +1757,7 @@ with the following \f$3 \times 3\f$ aperture:
 
 @param src Source image.
 @param dst Destination image of the same size and the same number of channels as src .
-@param ddepth Desired depth of the destination image.
+@param ddepth Desired depth of the destination image, see @ref filter_depths "combinations".
 @param ksize Aperture size used to compute the second-derivative filters. See #getDerivKernels for
 details. The size must be positive and odd.
 @param scale Optional scale factor for the computed Laplacian values. By default, no scaling is
@@ -2024,23 +2028,24 @@ transform.
 
 @param image 8-bit, single-channel binary source image. The image may be modified by the function.
 @param lines Output vector of lines. Each line is represented by a 2 or 3 element vector
-\f$(\rho, \theta)\f$ or \f$(\rho, \theta, \textrm{votes})\f$ . \f$\rho\f$ is the distance from the coordinate origin \f$(0,0)\f$ (top-left corner of
-the image). \f$\theta\f$ is the line rotation angle in radians (
-\f$0 \sim \textrm{vertical line}, \pi/2 \sim \textrm{horizontal line}\f$ ).
+\f$(\rho, \theta)\f$ or \f$(\rho, \theta, \textrm{votes})\f$, where \f$\rho\f$ is the distance from
+the coordinate origin \f$(0,0)\f$ (top-left corner of the image), \f$\theta\f$ is the line rotation
+angle in radians ( \f$0 \sim \textrm{vertical line}, \pi/2 \sim \textrm{horizontal line}\f$ ), and
 \f$\textrm{votes}\f$ is the value of accumulator.
 @param rho Distance resolution of the accumulator in pixels.
 @param theta Angle resolution of the accumulator in radians.
-@param threshold Accumulator threshold parameter. Only those lines are returned that get enough
+@param threshold %Accumulator threshold parameter. Only those lines are returned that get enough
 votes ( \f$>\texttt{threshold}\f$ ).
-@param srn For the multi-scale Hough transform, it is a divisor for the distance resolution rho .
+@param srn For the multi-scale Hough transform, it is a divisor for the distance resolution rho.
 The coarse accumulator distance resolution is rho and the accurate accumulator resolution is
-rho/srn . If both srn=0 and stn=0 , the classical Hough transform is used. Otherwise, both these
+rho/srn. If both srn=0 and stn=0, the classical Hough transform is used. Otherwise, both these
 parameters should be positive.
 @param stn For the multi-scale Hough transform, it is a divisor for the distance resolution theta.
 @param min_theta For standard and multi-scale Hough transform, minimum angle to check for lines.
 Must fall between 0 and max_theta.
-@param max_theta For standard and multi-scale Hough transform, maximum angle to check for lines.
-Must fall between min_theta and CV_PI.
+@param max_theta For standard and multi-scale Hough transform, an upper bound for the angle.
+Must fall between min_theta and CV_PI. The actual maximum angle in the accumulator may be slightly
+less than max_theta, depending on the parameters min_theta and theta.
  */
 CV_EXPORTS_W void HoughLines( InputArray image, OutputArray lines,
                               double rho, double theta, int threshold,
@@ -2068,7 +2073,7 @@ And this is the output of the above program in case of the probabilistic Hough t
 line segment.
 @param rho Distance resolution of the accumulator in pixels.
 @param theta Angle resolution of the accumulator in radians.
-@param threshold Accumulator threshold parameter. Only those lines are returned that get enough
+@param threshold %Accumulator threshold parameter. Only those lines are returned that get enough
 votes ( \f$>\texttt{threshold}\f$ ).
 @param minLineLength Minimum line length. Line segments shorter than that are rejected.
 @param maxLineGap Maximum allowed gap between points on the same line to link them.
@@ -2087,13 +2092,14 @@ The function finds lines in a set of points using a modification of the Hough tr
 @param lines Output vector of found lines. Each vector is encoded as a vector<Vec3d> \f$(votes, rho, theta)\f$.
 The larger the value of 'votes', the higher the reliability of the Hough line.
 @param lines_max Max count of Hough lines.
-@param threshold Accumulator threshold parameter. Only those lines are returned that get enough
+@param threshold %Accumulator threshold parameter. Only those lines are returned that get enough
 votes ( \f$>\texttt{threshold}\f$ ).
 @param min_rho Minimum value for \f$\rho\f$ for the accumulator (Note: \f$\rho\f$ can be negative. The absolute value \f$|\rho|\f$ is the distance of a line to the origin.).
 @param max_rho Maximum value for \f$\rho\f$ for the accumulator.
 @param rho_step Distance resolution of the accumulator.
 @param min_theta Minimum angle value of the accumulator in radians.
-@param max_theta Maximum angle value of the accumulator in radians.
+@param max_theta Upper bound for the angle value of the accumulator in radians. The actual maximum
+angle may be slightly less than max_theta, depending on the parameters min_theta and theta_step.
 @param theta_step Angle resolution of the accumulator in radians.
  */
 CV_EXPORTS_W void HoughLinesPointSet( InputArray point, OutputArray lines, int lines_max, int threshold,
@@ -2199,7 +2205,7 @@ case of multi-channel images, each channel is processed independently.
 @param src input image; the number of channels can be arbitrary, but the depth should be one of
 CV_8U, CV_16U, CV_16S, CV_32F or CV_64F.
 @param dst output image of the same size and type as src.
-@param kernel structuring element used for dilation; if elemenat=Mat(), a 3 x 3 rectangular
+@param kernel structuring element used for dilation; if element=Mat(), a 3 x 3 rectangular
 structuring element is used. Kernel can be created using #getStructuringElement
 @param anchor position of the anchor within the element; default value (-1, -1) means that the
 anchor is at the element center.
@@ -2265,7 +2271,7 @@ way:
     resize(src, dst, Size(), 0.5, 0.5, interpolation);
 @endcode
 To shrink an image, it will generally look best with #INTER_AREA interpolation, whereas to
-enlarge an image, it will generally look best with c#INTER_CUBIC (slow) or #INTER_LINEAR
+enlarge an image, it will generally look best with #INTER_CUBIC (slow) or #INTER_LINEAR
 (faster but still looks OK).
 
 @param src input image.
@@ -2357,7 +2363,7 @@ The function remap transforms the source image using the specified map:
 where values of pixels with non-integer coordinates are computed using one of available
 interpolation methods. \f$map_x\f$ and \f$map_y\f$ can be encoded as separate floating-point maps
 in \f$map_1\f$ and \f$map_2\f$ respectively, or interleaved floating-point maps of \f$(x,y)\f$ in
-\f$map_1\f$, or fixed-point maps created by using convertMaps. The reason you might want to
+\f$map_1\f$, or fixed-point maps created by using #convertMaps. The reason you might want to
 convert from floating to fixed-point representations of a map is that they can yield much faster
 (\~2x) remapping operations. In the converted case, \f$map_1\f$ contains pairs (cvFloor(x),
 cvFloor(y)) and \f$map_2\f$ contains indices in a table of interpolation coefficients.
@@ -2367,7 +2373,7 @@ This function cannot operate in-place.
 @param src Source image.
 @param dst Destination image. It has the same size as map1 and the same type as src .
 @param map1 The first map of either (x,y) points or just x values having the type CV_16SC2 ,
-CV_32FC1, or CV_32FC2. See convertMaps for details on converting a floating point
+CV_32FC1, or CV_32FC2. See #convertMaps for details on converting a floating point
 representation to fixed-point for speed.
 @param map2 The second map of y values having the type CV_16UC1, CV_32FC1, or none (empty map
 if map1 is (x,y) points), respectively.
@@ -2392,7 +2398,7 @@ options ( (map1.type(), map2.type()) \f$\rightarrow\f$ (dstmap1.type(), dstmap2.
 supported:
 
 - \f$\texttt{(CV_32FC1, CV_32FC1)} \rightarrow \texttt{(CV_16SC2, CV_16UC1)}\f$. This is the
-most frequently used conversion operation, in which the original floating-point maps (see remap )
+most frequently used conversion operation, in which the original floating-point maps (see #remap)
 are converted to a more compact and much faster fixed-point representation. The first output array
 contains the rounded coordinates and the second array (created only when nninterpolation=false )
 contains indices in the interpolation tables.
@@ -2725,7 +2731,7 @@ It makes possible to do a fast blurring or fast block correlation with a variabl
 example. In case of multi-channel images, sums for each channel are accumulated independently.
 
 As a practical example, the next figure shows the calculation of the integral of a straight
-rectangle Rect(3,3,3,2) and of a tilted rectangle Rect(5,1,2,3) . The selected pixels in the
+rectangle Rect(4,4,3,2) and of a tilted rectangle Rect(5,1,2,3) . The selected pixels in the
 original image are shown, as well as the relative pixels in the integral images sum and tilted .
 
 ![integral calculation example](pics/integral.png)
@@ -3120,7 +3126,7 @@ where cameraMatrix can be chosen arbitrarily.
 of 4, 5, 8, 12 or 14 elements. If the vector is NULL/empty, the zero distortion coefficients are assumed.
 @param R Optional rectification transformation in the object space (3x3 matrix). R1 or R2 ,
 computed by #stereoRectify can be passed here. If the matrix is empty, the identity transformation
-is assumed. In cvInitUndistortMap R assumed to be an identity matrix.
+is assumed. In #initUndistortRectifyMap R is assumed to be an identity matrix.
 @param newCameraMatrix New camera matrix \f$A'=\vecthreethree{f_x'}{0}{c_x'}{0}{f_y'}{c_y'}{0}{0}{1}\f$.
 @param size Undistorted image size.
 @param m1type Type of the first output map that can be CV_32FC1, CV_32FC2 or CV_16SC2, see #convertMaps
@@ -3270,7 +3276,14 @@ CV_EXPORTS void calcHist( const Mat* images, int nimages,
                           const int* histSize, const float** ranges,
                           bool uniform = true, bool accumulate = false );
 
-/** @overload */
+/** @overload
+
+this variant supports only uniform histograms.
+
+ranges argument is either empty vector or a flattened vector of histSize.size()*2 elements
+(histSize.size() element pairs). The first and second elements of each pair specify the lower and
+upper boundaries.
+*/
 CV_EXPORTS_W void calcHist( InputArrayOfArrays images,
                             const std::vector<int>& channels,
                             InputArray mask, OutputArray hist,

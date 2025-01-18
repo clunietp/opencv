@@ -1408,7 +1408,7 @@ bool CvCapture_FFMPEG::retrieveFrame(int, unsigned char** data, int* step, int* 
             img_convert_ctx,
             picture->data,
             picture->linesize,
-            0, video_st->codec->coded_height,
+            0, picture->height,
             rgb_picture.data,
             rgb_picture.linesize
             );
@@ -1537,7 +1537,7 @@ int64_t CvCapture_FFMPEG::get_bitrate() const
 
 double CvCapture_FFMPEG::get_fps() const
 {
-#if 0 && LIBAVFORMAT_BUILD >= CALC_FFMPEG_VERSION(55, 1, 100) && LIBAVFORMAT_VERSION_MICRO >= 100
+#if LIBAVFORMAT_BUILD >= CALC_FFMPEG_VERSION(55, 1, 100) && LIBAVFORMAT_VERSION_MICRO >= 100
     double fps = r2d(av_guess_frame_rate(ic, ic->streams[video_stream], NULL));
 #else
 #if LIBAVCODEC_BUILD >= CALC_FFMPEG_VERSION(54, 1, 0)

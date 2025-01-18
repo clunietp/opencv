@@ -136,7 +136,7 @@ void QRDetect::init(const Mat& src, double eps_vertical_, double eps_horizontal_
         const int width  = cvRound(src.size().width  * coeff_expansion);
         const int height = cvRound(src.size().height  * coeff_expansion);
         Size new_size(width, height);
-        resize(src, barcode, new_size, 0, 0, INTER_LINEAR);
+        resize(src, barcode, new_size, 0, 0, INTER_LINEAR_EXACT);
     }
     else if (min_side > 512.0)
     {
@@ -524,7 +524,7 @@ bool QRDetect::localization()
         const int height = cvRound(bin_barcode.size().height * coeff_expansion);
         Size new_size(width, height);
         Mat intermediate;
-        resize(bin_barcode, intermediate, new_size, 0, 0, INTER_LINEAR);
+        resize(bin_barcode, intermediate, new_size, 0, 0, INTER_LINEAR_EXACT);
         bin_barcode = intermediate.clone();
         for (size_t i = 0; i < localization_points.size(); i++)
         {
@@ -537,7 +537,7 @@ bool QRDetect::localization()
         const int height = cvRound(bin_barcode.size().height / coeff_expansion);
         Size new_size(width, height);
         Mat intermediate;
-        resize(bin_barcode, intermediate, new_size, 0, 0, INTER_LINEAR);
+        resize(bin_barcode, intermediate, new_size, 0, 0, INTER_LINEAR_EXACT);
         bin_barcode = intermediate.clone();
         for (size_t i = 0; i < localization_points.size(); i++)
         {
@@ -570,10 +570,11 @@ bool QRDetect::computeTransformationPoints()
     {
         Mat mask = Mat::zeros(bin_barcode.rows + 2, bin_barcode.cols + 2, CV_8UC1);
         uint8_t next_pixel, future_pixel = 255;
-        int count_test_lines = 0, index = cvRound(localization_points[i].x);
-        for (; index < bin_barcode.cols - 1; index++)
+        int count_test_lines = 0, index_c = max(0, min(cvRound(localization_points[i].x), bin_barcode.cols - 1));
+        const int index_r = max(0, min(cvRound(localization_points[i].y), bin_barcode.rows - 1));
+        for (; index_c < bin_barcode.cols - 1; index_c++)
         {
-            next_pixel = bin_barcode.ptr<uint8_t>(cvRound(localization_points[i].y))[index + 1];
+            next_pixel = bin_barcode.ptr<uint8_t>(index_r)[index_c + 1];
             if (next_pixel == future_pixel)
             {
                 future_pixel = static_cast<uint8_t>(~future_pixel);
@@ -581,7 +582,7 @@ bool QRDetect::computeTransformationPoints()
                 if (count_test_lines == 2)
                 {
                     floodFill(bin_barcode, mask,
-                              Point(index + 1, cvRound(localization_points[i].y)), 255,
+                              Point(index_c + 1, index_r), 255,
                               0, Scalar(), Scalar(), FLOODFILL_MASK_ONLY);
                     break;
                 }
@@ -1070,6 +1071,15 @@ protected:
     };
 };
 
+float static getMinSideLen(const vector<Point2f> &points) {
+    CV_Assert(points.size() == 4ull);
+    double res = norm(points[1]-points[0]);
+    for (size_t i = 1ull; i < points.size(); i++) {
+        res = min(res, norm(points[i]-points[(i+1ull) % points.size()]));
+    }
+    return static_cast<float>(res);
+}
+
 void QRDecode::init(const Mat &src, const vector<Point2f> &points)
 {
     CV_TRACE_FUNCTION();
@@ -1081,7 +1091,7 @@ void QRDecode::init(const Mat &src, const vector<Point2f> &points)
     original_points = bbox;
     version = 0;
     version_size = 0;
-    test_perspective_size = 251;
+    test_perspective_size = max(getMinSideLen(points)+1.f, 251.f);
     result_info = "";
 }
 
@@ -2096,7 +2106,7 @@ bool QRDecode::straightenQRCodeInParts()
     {
         return false;
     }
-    float perspective_curved_size = 251.0;
+    float perspective_curved_size = max(getMinSideLen(original_points)+1.f, 251.f);;
     const Size temporary_size(cvRound(perspective_curved_size), cvRound(perspective_curved_size));
 
     float dist = perspective_curved_size / (number_pnts_to_cut - 1);
@@ -2367,9 +2377,9 @@ bool QRDecode::versionDefinition()
 bool QRDecode::samplingForVersion()
 {
     CV_TRACE_FUNCTION();
-    const double multiplyingFactor = (version < 3)  ? 1 :
-                                     (version == 3) ? 1.5 :
-                                     version * (version + 1);
+    const double multiplyingFactor = (version < 3)  ? 1. :
+                                     (version == 3) ? 2. :
+                                     3.;
     const Size newFactorSize(
                   cvRound(no_border_intermediate.size().width  * multiplyingFactor),
                   cvRound(no_border_intermediate.size().height * multiplyingFactor));
@@ -2378,44 +2388,37 @@ bool QRDecode::samplingForVersion()
 
     const int delta_rows = cvRound((postIntermediate.rows * 1.0) / version_size);
     const int delta_cols = cvRound((postIntermediate.cols * 1.0) / version_size);
+    // number of elements in the tail
+    const int skipped_rows = postIntermediate.rows - delta_rows * version_size;
+    const int skipped_cols = postIntermediate.cols - delta_cols * version_size;
 
-    vector<double> listFrequencyElem;
-    for (int r = 0; r < postIntermediate.rows; r += delta_rows)
-    {
-        for (int c = 0; c < postIntermediate.cols; c += delta_cols)
-        {
+    vector<int> deltas_rows(version_size, delta_rows);
+    vector<int> deltas_cols(version_size, delta_cols);
+
+    for (int i = 0; i < abs(skipped_rows); i++) {
+        // fix deltas_rows at each skip_step
+        const double skip_step = static_cast<double>(version_size)/abs(skipped_rows);
+        const int corrected_index = static_cast<int>(i*skip_step + skip_step/2);
+        deltas_rows[corrected_index] += skipped_rows > 0 ? 1 : -1;
+    }
+    for (int i = 0; i < abs(skipped_cols); i++) {
+        // fix deltas_cols at each skip_step
+        const double skip_step = static_cast<double>(version_size)/abs(skipped_cols);
+        const int corrected_index = static_cast<int>(i*skip_step + skip_step/2);
+        deltas_cols[corrected_index] += skipped_cols > 0 ? 1 : -1;
+    }
+
+    const double totalFrequencyElem = countNonZero(postIntermediate) / static_cast<double>(postIntermediate.total());
+    straight = Mat(Size(version_size, version_size), CV_8UC1, Scalar(0));
+
+    for (int r = 0, i = 0; i < version_size; r += deltas_rows[i], i++) {
+        for (int c = 0, j = 0; j < version_size; c += deltas_cols[j], j++) {
             Mat tile = postIntermediate(
                            Range(r, min(r + delta_rows, postIntermediate.rows)),
                            Range(c, min(c + delta_cols, postIntermediate.cols)));
             const double frequencyElem = (countNonZero(tile) * 1.0) / tile.total();
-            listFrequencyElem.push_back(frequencyElem);
+            straight.ptr<uint8_t>(i)[j] = (frequencyElem < totalFrequencyElem) ? 0 : 255;
         }
-    }
-
-    double dispersionEFE = std::numeric_limits<double>::max();
-    double experimentalFrequencyElem = 0;
-    for (double expVal = 0; expVal < 1; expVal+=0.001)
-    {
-        double testDispersionEFE = 0.0;
-        for (size_t i = 0; i < listFrequencyElem.size(); i++)
-        {
-            testDispersionEFE += (listFrequencyElem[i] - expVal) *
-                                 (listFrequencyElem[i] - expVal);
-        }
-        testDispersionEFE /= (listFrequencyElem.size() - 1);
-        if (dispersionEFE > testDispersionEFE)
-        {
-            dispersionEFE = testDispersionEFE;
-            experimentalFrequencyElem = expVal;
-        }
-    }
-
-    straight = Mat(Size(version_size, version_size), CV_8UC1, Scalar(0));
-    for (int r = 0; r < version_size * version_size; r++)
-    {
-        int i   = r / straight.cols;
-        int j   = r % straight.cols;
-        straight.ptr<uint8_t>(i)[j] = (listFrequencyElem[r] < experimentalFrequencyElem) ? 0 : 255;
     }
     return true;
 }
@@ -2762,7 +2765,7 @@ void QRDetectMulti::init(const Mat& src, double eps_vertical_, double eps_horizo
         const int width  = cvRound(src.size().width  * coeff_expansion);
         const int height = cvRound(src.size().height  * coeff_expansion);
         Size new_size(width, height);
-        resize(src, barcode, new_size, 0, 0, INTER_LINEAR);
+        resize(src, barcode, new_size, 0, 0, INTER_LINEAR_EXACT);
     }
     else if (min_side > 512.0)
     {
@@ -3119,7 +3122,7 @@ int QRDetectMulti::findNumberLocalizationPoints(vector<Point2f>& tmp_localizatio
         const int height = cvRound(bin_barcode.size().height * coeff_expansion);
         Size new_size(width, height);
         Mat intermediate;
-        resize(bin_barcode, intermediate, new_size, 0, 0, INTER_LINEAR);
+        resize(bin_barcode, intermediate, new_size, 0, 0, INTER_LINEAR_EXACT);
         bin_barcode = intermediate.clone();
     }
     else if (purpose == ZOOMING)
@@ -3128,7 +3131,7 @@ int QRDetectMulti::findNumberLocalizationPoints(vector<Point2f>& tmp_localizatio
         const int height = cvRound(bin_barcode.size().height / coeff_expansion);
         Size new_size(width, height);
         Mat intermediate;
-        resize(bin_barcode, intermediate, new_size, 0, 0, INTER_LINEAR);
+        resize(bin_barcode, intermediate, new_size, 0, 0, INTER_LINEAR_EXACT);
         bin_barcode = intermediate.clone();
     }
     else
@@ -3146,7 +3149,7 @@ void QRDetectMulti::findQRCodeContours(vector<Point2f>& tmp_localization_points,
     const int width  = cvRound(bin_barcode.size().width);
     const int height = cvRound(bin_barcode.size().height);
     Size new_size(width, height);
-    resize(bar, bar, new_size, 0, 0, INTER_LINEAR);
+    resize(bar, bar, new_size, 0, 0, INTER_LINEAR_EXACT);
     blur(bar, blur_image, Size(3, 3));
     threshold(blur_image, threshold_output, 50, 255, THRESH_BINARY);
 

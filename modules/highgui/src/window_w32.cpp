@@ -1939,26 +1939,19 @@ static LRESULT CALLBACK HGToolbarProc( HWND hwnd, UINT uMsg, WPARAM wParam, LPAR
     case WM_NCCALCSIZE:
         {
             LRESULT ret = CallWindowProc(window->toolbar.toolBarProc, hwnd, uMsg, wParam, lParam);
-            int rows = (int)SendMessage(hwnd, TB_GETROWS, 0, 0);
+            CvTrackbar* trackbar = window->toolbar.first;
 
-            if(window->toolbar.rows != rows)
-            {
-                SendMessage(window->toolbar.toolbar, TB_BUTTONCOUNT, 0, 0);
-                CvTrackbar* trackbar = window->toolbar.first;
-
-                for( ; trackbar != 0; trackbar = trackbar->next )
-                {
-                    RECT rect = { 0 };
-                    SendMessage(window->toolbar.toolbar, TB_GETITEMRECT,
-                               (WPARAM)trackbar->id, (LPARAM)&rect);
-                    MoveWindow(trackbar->hwnd, rect.left + HG_BUDDY_WIDTH, rect.top,
-                               rect.right - rect.left - HG_BUDDY_WIDTH,
-                               rect.bottom - rect.top, FALSE);
-                    MoveWindow(trackbar->buddy, rect.left, rect.top,
-                               HG_BUDDY_WIDTH, rect.bottom - rect.top, FALSE);
-                }
-                window->toolbar.rows = rows;
+            for (; trackbar != 0; trackbar = trackbar->next) {
+                RECT rect = { 0 };
+                SendMessage(window->toolbar.toolbar, TB_GETITEMRECT,
+                    (WPARAM)trackbar->id, (LPARAM)&rect);
+                MoveWindow(trackbar->hwnd, rect.left + HG_BUDDY_WIDTH, rect.top,
+                    rect.right - rect.left - HG_BUDDY_WIDTH,
+                    rect.bottom - rect.top, FALSE);
+                MoveWindow(trackbar->buddy, rect.left, rect.top,
+                    HG_BUDDY_WIDTH, rect.bottom - rect.top, FALSE);
             }
+            window->toolbar.rows = static_cast<int>(SendMessage(hwnd, TB_GETROWS, 0, 0));
             return ret;
         }
     }
@@ -2212,21 +2205,6 @@ icvCreateTrackbar( const char* trackbar_name, const char* window_name,
         /* Retrieve current buttons count */
         bcount = (int)SendMessage(window->toolbar.toolbar, TB_BUTTONCOUNT, 0, 0);
 
-        if(bcount > 1)
-        {
-            /* If this is not the first button then we need to
-            separate it from the previous one */
-            tbs.iBitmap = 0;
-            tbs.idCommand = bcount; // Set button id to it's number
-            tbs.iString = 0;
-            tbs.fsStyle = TBSTYLE_SEP;
-            tbs.fsState = TBSTATE_ENABLED;
-            SendMessage(window->toolbar.toolbar, TB_ADDBUTTONS, 1, (LPARAM)&tbs);
-
-            // Retrieve current buttons count
-            bcount = (int)SendMessage(window->toolbar.toolbar, TB_BUTTONCOUNT, 0, 0);
-        }
-
         /* Add a button which we're going to cover with the slider */
         tbs.iBitmap = 0;
         tbs.idCommand = bcount; // Set button id to it's number
@@ -2253,7 +2231,7 @@ icvCreateTrackbar( const char* trackbar_name, const char* window_name,
         tbis.cbSize = sizeof(tbis);
         tbis.dwMask = TBIF_SIZE;
 
-        GetClientRect(window->hwnd, &rect);
+        GetClientRect(window->toolbar.toolbar, &rect);
         tbis.cx = (unsigned short)(rect.right - rect.left);
 
         SendMessage(window->toolbar.toolbar, TB_SETBUTTONINFO,
@@ -2271,7 +2249,7 @@ icvCreateTrackbar( const char* trackbar_name, const char* window_name,
         trackbar->parent = window;
         trackbar->pos = 0;
         trackbar->data = 0;
-        trackbar->id = bcount;
+        trackbar->id = tbs.idCommand;
         trackbar->next = window->toolbar.first;
         trackbar->name = (char*)(trackbar + 1);
         memcpy( trackbar->name, trackbar_name, len + 1 );

@@ -15,6 +15,9 @@
 #define CV_LOG_STRIP_LEVEL CV_LOG_LEVEL_VERBOSE + 1
 #include <opencv2/core/utils/logger.hpp>
 
+#include <opencv2/core/utils/configuration.private.hpp>
+
+
 #ifdef HAVE_PROTOBUF
 
 #include <iostream>
@@ -78,6 +81,7 @@ public:
     ONNXImporter(Net& net, const char *onnxFile)
         : dstNet(net), dispatch(buildDispatchMap())
         , onnx_opset(0)
+        , useLegacyNames(getParamUseLegacyNames())
     {
         hasDynamicShapes = false;
         CV_Assert(onnxFile);
@@ -100,6 +104,7 @@ public:
     ONNXImporter(Net& net, const char* buffer, size_t sizeBuffer)
         : dstNet(net), dispatch(buildDispatchMap())
         , onnx_opset(0)
+        , useLegacyNames(getParamUseLegacyNames())
     {
         hasDynamicShapes = false;
         CV_LOG_DEBUG(NULL, "DNN/ONNX: processing in-memory ONNX model (" << sizeBuffer << " bytes)");
@@ -196,7 +201,17 @@ private:
 
     int onnx_opset;  // OperatorSetIdProto for 'onnx' domain
     void parseOperatorSet();
+
+
+    bool useLegacyNames;
+    bool getParamUseLegacyNames()
+    {
+        bool param = utils::getConfigurationParameterBool("OPENCV_DNN_ONNX_USE_LEGACY_NAMES", false);
+        return param;
+    }
+    const std::string extractNodeName(const opencv_onnx::NodeProto& node_proto);
 };
+
 
 inline void replaceLayerParam(LayerParams& layerParams, const String& oldKey, const String& newKey)
 {
@@ -720,12 +735,14 @@ void ONNXImporter::populateNet()
     CV_LOG_DEBUG(NULL, "DNN/ONNX: import completed!");
 }
 
-static
-const std::string& extractNodeName(const opencv_onnx::NodeProto& node_proto)
+const std::string ONNXImporter::extractNodeName(const opencv_onnx::NodeProto& node_proto)
 {
+    // We need to rework DNN outputs API, this is a workaround for #21698
     if (node_proto.has_name() && !node_proto.name().empty())
     {
-        return node_proto.name();
+        if (useLegacyNames)
+            return node_proto.name();
+        return cv::format("onnx_node!%s", node_proto.name().c_str());
     }
     for (int i = 0; i < node_proto.output_size(); ++i)
     {
@@ -735,7 +752,9 @@ const std::string& extractNodeName(const opencv_onnx::NodeProto& node_proto)
         // the second method is to use an empty string in place of an input or output name.
         if (!name.empty())
         {
-            return name;
+            if (useLegacyNames)
+                return name.c_str();
+            return cv::format("onnx_node_output_%d!%s", i, name.c_str());
         }
     }
     CV_Error(Error::StsAssert, "Couldn't deduce Node name.");
@@ -1740,15 +1759,15 @@ void ONNXImporter::parseBatchNormalization(LayerParams& layerParams, const openc
     addLayer(layerParams, node_proto);
 }
 
+// A * B + C = Y, we require that the dimension of A is [m, k], and the dimension of B is [n, k].
+// And the dim of output Y is [m, n]
 void ONNXImporter::parseGemm(LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto)
 {
     CV_Assert(node_proto.input_size() >= 2);
     layerParams.type = "InnerProduct";
     Mat weights = getBlob(node_proto, 1);
-    int ind_num_out = 0;
-    if (layerParams.has("transB") && !layerParams.get<int>("transB")) {
+    if (!layerParams.get<int>("transB", 0)) {
         transpose(weights, weights);
-        ind_num_out = 1;
     }
     layerParams.blobs.push_back(weights);
 
@@ -1770,7 +1789,7 @@ void ONNXImporter::parseGemm(LayerParams& layerParams, const opencv_onnx::NodePr
         addLayer(constParams, proto);
     }
 
-    layerParams.set("num_output", layerParams.blobs[0].size[ind_num_out]);
+    layerParams.set("num_output", layerParams.blobs[0].size[0]);
     layerParams.set("bias_term", node_proto.input_size() == 3);
     addLayer(layerParams, node_proto);
 }
@@ -1799,6 +1818,8 @@ void ONNXImporter::parseMatMul(LayerParams& layerParams, const opencv_onnx::Node
 
 void findBroadAxis(const MatShape& broadShape, const MatShape& outShape, size_t& axis, int& broadAxis)
 {
+    // Currently, this function can only complete 1-dimensional expansion of broadShape.
+    // If there are two dimensions in broadShape that need to be expended, it will fail.
     const size_t diff = outShape.size() - broadShape.size();
 
     // find the first non-one element of the broadcasting shape
@@ -1963,25 +1984,30 @@ void ONNXImporter::parseMul(LayerParams& layerParams, const opencv_onnx::NodePro
         const MatShape& outShape = outShapes[node_proto.input(0)];
 
         size_t axis = 0;
-        int broadAxis = -1;
-        findBroadAxis(broadShape, outShape, axis, broadAxis);
-
-        // if there is a one dimension in the middle that should be broadcasted, broadcast it
-        if (broadAxis != -1)
+        if (total(broadShape) != 1)
         {
-            opencv_onnx::NodeProto concat_node_proto = node_proto;
-            const std::string& input1 = concat_node_proto.input(1);
+            // If broadShape is a scalar, we set axis as 0.
+            // Other-wise, we check broadcast is available.
+            int broadAxis = -1;
+            findBroadAxis(broadShape, outShape, axis, broadAxis);
 
-            expandMid(layerParams.name, concat_node_proto, input1, outShape[broadAxis]);
+            // if there is a one dimension in the middle that should be broadcasted, broadcast it
+            if (broadAxis != -1)
+            {
+                opencv_onnx::NodeProto concat_node_proto = node_proto;
+                const std::string& input1 = concat_node_proto.input(1);
 
-            LayerParams concatLP;
-            concatLP.name = layerParams.name + "/concat";
-            concatLP.set("axis", broadAxis);
-            concatLP.type = "Concat";
-            concat_node_proto.set_output(0, concatLP.name);
+                expandMid(layerParams.name, concat_node_proto, input1, outShape[broadAxis]);
 
-            addLayer(concatLP, concat_node_proto);
-            node_proto.set_input(1, concatLP.name);
+                LayerParams concatLP;
+                concatLP.name = layerParams.name + "/concat";
+                concatLP.set("axis", broadAxis);
+                concatLP.type = "Concat";
+                concat_node_proto.set_output(0, concatLP.name);
+
+                addLayer(concatLP, concat_node_proto);
+                node_proto.set_input(1, concatLP.name);
+            }
         }
 
         CV_Assert(axis != outShape.size());
